@@ -1,0 +1,442 @@
+version: '3.8'
+
+services:
+  coturn:
+    image: docker.io/coturn/coturn:4.6.2-r11-alpine
+    container_name: matrix-coturn
+    restart: always
+    user: "999:1001"
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    entrypoint: turnserver
+    command: -c /turnserver.conf # Added this command
+    read_only: true
+    tmpfs:
+      - /var/tmp:size=100m,rw,noexec,nosuid
+    ports:
+      - "3478:3478/tcp"
+      - "3478:3478/udp"
+      - "5349:5349/tcp"
+      - "5349:5349/udp"
+      - "49152-49172:49152-49172/udp"
+    volumes:
+      - /matrix/coturn/turnserver.conf:/turnserver.conf:ro
+      - /matrix/traefik-certs-dumper/dumped-certificates/matrix.{DOMAIN_NAME}/certificate.crt:/certificate.crt:ro
+      - /matrix/traefik-certs-dumper/dumped-certificates/matrix.{DOMAIN_NAME}/privatekey.key:/privatekey.key:ro
+    networks:
+      - matrix-coturn_network
+
+  matrix-client-element:
+    image: vectorim/element-web:v1.11.91
+    container_name: matrix-client-element
+    restart: unless-stopped
+    # logging:
+    # driver: "none"
+    # user: "999:1001"
+    cap_drop:
+      - ALL
+    # read_only: true
+    tmpfs:
+      - /tmp:size=10m,mode=1777
+    volumes:
+      - /matrix/client-element/config.json:/app/config.json:ro
+      - /matrix/client-element/map_style.json:/app/map_style.json:ro
+      - /matrix/client-element/nginx.conf:/etc/nginx/nginx.conf
+      - /matrix/client-element/config.json:/app/config.element.{DOMAIN_NAME}.json:ro
+      - /matrix/client-element/welcome.html:/app/welcome.html:ro
+      - /matrix/client-element/home.html:/app/home.html:ro
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik_network"
+      - "traefik.http.services.matrix-client-element.loadbalancer.server.port=8080"
+      - "traefik.http.middlewares.matrix-client-element-add-headers.headers.customresponseheaders.X-XSS-Protection=1; mode=block"
+      - "traefik.http.middlewares.matrix-client-element-add-headers.headers.customresponseheaders.X-Frame-Options=SAMEORIGIN"
+      - "traefik.http.middlewares.matrix-client-element-add-headers.headers.customresponseheaders.X-Content-Type-Options=nosniff"
+      - "traefik.http.middlewares.matrix-client-element-add-headers.headers.customresponseheaders.Content-Security-Policy=frame-ancestors 'self'"
+      - "traefik.http.middlewares.matrix-client-element-add-headers.headers.customresponseheaders.Permission-Policy=interest-cohort=()"
+      - "traefik.http.middlewares.matrix-client-element-add-headers.headers.customresponseheaders.Strict-Transport-Security=max-age=31536000; includeSubDomains"
+      - "traefik.http.routers.matrix-client-element.rule=Host(`element.{DOMAIN_NAME}`)"
+      - "traefik.http.routers.matrix-client-element.service=matrix-client-element"
+      - "traefik.http.routers.matrix-client-element.middlewares=compression@file,matrix-client-element-add-headers"
+      - "traefik.http.routers.matrix-client-element.entrypoints=web-secure"
+      - "traefik.http.routers.matrix-client-element.tls=true"
+      - "traefik.http.routers.matrix-client-element.tls.certResolver=default"
+    networks:
+      - matrix_network
+      - traefik_network
+
+  matrix-postgres:
+    container_name: matrix-postgres
+    image: docker.io/postgres:17.2-alpine
+    restart: always
+    user: "999:1001"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=100m
+      - /run/postgresql:rw,noexec,nosuid,size=100m,mode=0700,uid=999,gid=1001
+    shm_size: 256m
+    networks:
+      - matrix-postgres_main_network
+    env_file:
+      - /matrix/postgres/env-postgres-server
+    volumes:
+      - /matrix/postgres/data:/var/lib/postgresql/data
+      - /etc/passwd:/etc/passwd:ro
+    command:
+      - postgres
+      - -c
+      - 'max_connections=200'
+      - -c
+      - 'shared_buffers=3998MB'
+      - -c
+      - 'effective_cache_size=11994MB'
+      - -c
+      - 'maintenance_work_mem=999MB'
+      - -c
+      - 'checkpoint_completion_target=0.9'
+      - -c
+      - 'wal_buffers=16MB'
+      - -c
+      - 'default_statistics_target=100'
+      - -c
+      - 'random_page_cost=1.1'
+      - -c
+      - 'effective_io_concurrency=200'
+      - -c
+      - 'work_mem=10234kB'
+      - -c
+      - 'huge_pages=off'
+      - -c
+      - 'min_wal_size=1024MB'
+      - -c
+      - 'max_wal_size=4096MB'
+      - -c
+      - 'max_worker_processes=4'
+      - -c
+      - 'max_parallel_workers=4'
+      - -c
+      - 'max_parallel_workers_per_gather=2'
+      - -c
+      - 'max_parallel_maintenance_workers=2'
+      # logging:
+      # driver: "none"
+    # healthcheck:
+    #   test:
+    #     - "CMD-SHELL"
+    #     - "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"
+    #     # - "pg_isready -U $(grep -oP '^POSTGRES_USER=\\K.*' /matrix/postgres/env-postgres-server) -d $(grep -oP '^POSTGRES_DB=\\K.*' /matrix/postgres/env-postgres-server)"
+    #   interval: 10s
+    #   timeout: 5s
+    #   retries: 5
+    #   start_period: 10s
+
+  synapse:
+    image: ghcr.io/element-hq/synapse:v1.123.0
+    container_name: matrix-synapse
+    restart: always
+    user: "999:1001"
+    read_only: true
+    tmpfs:
+      - /tmp:size=2500m,mode=1777
+    cap_drop:
+      - ALL
+      # logging:
+      # driver: "none"
+    environment:
+      HOME: /root
+    depends_on:
+      matrix-postgres:
+        condition: service_started #service_healthy
+    volumes:
+      - /matrix/synapse/config:/data:ro
+      - /matrix/synapse/storage:/matrix-media-store-parent
+    command: [ "run", "-m", "synapse.app.homeserver", "-c", "/data/homeserver.yaml" ]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik_network"
+      - "traefik.http.services.matrix-synapse-client-api.loadbalancer.server.port=8008"
+      - "traefik.http.services.matrix-synapse-federation-api.loadbalancer.server.port=8048"
+      - "traefik.http.services.matrix-synapse-metrics.loadbalancer.server.port=9100"
+      - "traefik.http.middlewares.matrix-synapse-public-client-root-redirect.redirectregex.regex=(.*)"
+      - "traefik.http.middlewares.matrix-synapse-public-client-root-redirect.redirectregex.replacement=https://element.{DOMAIN_NAME}"
+      - "traefik.http.middlewares.matrix-static-files-well-known-compress.compress=true"
+      - "traefik.http.middlewares.matrix-static-files-well-known-compress.compress.minResponseBodyBytes=100"
+      - "traefik.http.routers.matrix-synapse-public-client-root.rule=Host(`matrix.{DOMAIN_NAME}`) && Path(`/`)"
+      - "traefik.http.routers.matrix-synapse-public-client-root.middlewares=compression@file,matrix-synapse-public-client-root-redirect"
+      - "traefik.http.routers.matrix-synapse-public-client-root.service=matrix-synapse-client-api"
+      - "traefik.http.routers.matrix-synapse-public-client-root.entrypoints=web-secure"
+      - "traefik.http.routers.matrix-synapse-public-client-root.tls=true"
+      - "traefik.http.routers.matrix-synapse-public-client-root.tls.certResolver=default"
+      - "traefik.http.routers.matrix-synapse-public-client-api.rule=Host(`matrix.{DOMAIN_NAME}`) && PathPrefix(`/_matrix`)"
+      - "traefik.http.routers.matrix-synapse-public-client-api.middlewares=compression@file"
+      - "traefik.http.routers.matrix-synapse-public-client-api.service=matrix-synapse-client-api"
+      - "traefik.http.routers.matrix-synapse-public-client-api.entrypoints=web-secure"
+      - "traefik.http.routers.matrix-synapse-public-client-api.tls=true"
+      - "traefik.http.routers.matrix-synapse-public-client-api.tls.certResolver=default"
+      - "traefik.http.routers.matrix-synapse-internal-client-api.rule=PathPrefix(`/_matrix`)"
+      - "traefik.http.routers.matrix-synapse-internal-client-api.service=matrix-synapse-client-api"
+      - "traefik.http.routers.matrix-synapse-internal-client-api.entrypoints=matrix-internal-matrix-client-api"
+      - "traefik.http.routers.matrix-synapse-public-client-synapse-client-api.rule=Host(`matrix.{DOMAIN_NAME}`) && PathPrefix(`/_synapse/client`)"
+      - "traefik.http.routers.matrix-synapse-public-client-synapse-client-api.middlewares=compression@file"
+      - "traefik.http.routers.matrix-synapse-public-client-synapse-client-api.service=matrix-synapse-client-api"
+      - "traefik.http.routers.matrix-synapse-public-client-synapse-client-api.entrypoints=web-secure"
+      - "traefik.http.routers.matrix-synapse-public-client-synapse-client-api.tls=true"
+      - "traefik.http.routers.matrix-synapse-public-client-synapse-client-api.tls.certResolver=default"
+      - "traefik.http.routers.matrix-synapse-public-client-synapse-admin-api.rule=Host(`matrix.{DOMAIN_NAME}`) && PathPrefix(`/_synapse/admin`)"
+      - "traefik.http.routers.matrix-synapse-public-client-synapse-admin-api.middlewares=compression@file"
+      - "traefik.http.routers.matrix-synapse-public-client-synapse-admin-api.service=matrix-synapse-client-api"
+      - "traefik.http.routers.matrix-synapse-public-client-synapse-admin-api.entrypoints=web-secure"
+      - "traefik.http.routers.matrix-synapse-public-client-synapse-admin-api.tls=true"
+      - "traefik.http.routers.matrix-synapse-public-client-synapse-admin-api.tls.certResolver=default"
+      - "traefik.http.routers.matrix-synapse-public-federation-api.rule=Host(`matrix.{DOMAIN_NAME}`) && PathPrefix(`/_matrix`)"
+      - "traefik.http.routers.matrix-synapse-public-federation-api.middlewares=compression@file"
+      - "traefik.http.routers.matrix-synapse-public-federation-api.service=matrix-synapse-federation-api"
+      - "traefik.http.routers.matrix-synapse-public-federation-api.entrypoints=matrix-federation"
+      - "traefik.http.routers.matrix-synapse-public-federation-api.tls=true"
+      - "traefik.http.routers.matrix-synapse-public-federation-api.tls.certResolver=default"
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8008/_matrix/client/versions" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - matrix-homeserver_network
+      - traefik_network
+      - matrix-postgres_main_network
+      - matrix-exim-relay_network
+
+  matrix-static-files:
+    image: docker.io/joseluisq/static-web-server:2.35.0-alpine # Changed image as per systemd
+    container_name: matrix-static-files
+    restart: unless-stopped
+    read_only: true
+    user: "999:1001" # Added user
+    cap_drop:
+      - ALL # Added cap_drop
+      # logging:
+      # driver: "none" # Added logging driver
+    environment:
+      HOME: /root # Added HOME environment variable
+    env_file:
+      - /matrix/static-files/env # Added env_file
+    volumes:
+      - /matrix/static-files/public:/public:ro # Changed volume mount
+      - /matrix/static-files/config:/config:ro # Changed volume mount
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik_network"
+      - "traefik.http.services.matrix-static-files.loadbalancer.server.port=80"
+      - "traefik.http.middlewares.matrix-static-files-well-known-compress.compress=true"
+      - "traefik.http.middlewares.matrix-static-files-well-known-compress.compress.minResponseBodyBytes=100"
+      - "traefik.http.routers.matrix-static-files-well-known.rule=Host(`matrix.{DOMAIN_NAME}`) && PathPrefix(`/.well-known/matrix`)"
+      - "traefik.http.routers.matrix-static-files-well-known.middlewares=matrix-static-files-well-known-compress"
+      - "traefik.http.routers.matrix-static-files-well-known.service=matrix-static-files"
+      - "traefik.http.routers.matrix-static-files-well-known.entrypoints=web-secure"
+      - "traefik.http.routers.matrix-static-files-well-known.tls=true"
+      - "traefik.http.routers.matrix-static-files-well-known.tls.certResolver=default"
+    networks:
+      - traefik_network
+
+  matrix-sygnal:
+    image: docker.io/matrixdotorg/sygnal:v0.15.1 # Changed image to specific version
+    container_name: matrix-sygnal
+    restart: unless-stopped
+    user: "999:1001" # Added user
+    cap_drop:
+      - ALL # Added cap_drop
+      # logging:
+      # driver: "none" # Added logging driver
+    environment:
+      # Added environment variables
+      HOME: /root
+      SYGNAL_CONF: /config/sygnal.yaml
+    volumes:
+      # Added volumes
+      - /matrix/sygnal/config:/config
+      - /matrix/sygnal/data:/data
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik_network"
+      - "traefik.http.services.matrix-sygnal.loadbalancer.server.port=8000"
+      - "traefik.http.routers.matrix-sygnal.rule=Host(`sygnal.{DOMAIN_NAME}`)"
+      - "traefik.http.routers.matrix-sygnal.service=matrix-sygnal"
+      - "traefik.http.routers.matrix-sygnal.entrypoints=web-secure"
+      - "traefik.http.routers.matrix-sygnal.tls=true"
+      - "traefik.http.routers.matrix-sygnal.tls.certResolver=default"
+    networks:
+      - traefik_network
+      - matrix-homeserver_network # Added matrix-homeserver_network
+
+  matrix-synapse-admin:
+    image: ghcr.io/etkecc/synapse-admin:v0.10.3-etke37 # Updated image to match systemd
+    container_name: matrix-synapse-admin
+    restart: always # Changed restart policy to match systemd
+    user: "999:1001" # Added user from systemd
+    cap_drop:
+      - ALL # Added cap_drop from systemd
+    cap_add:
+      # Added cap_add from systemd
+      - CHOWN
+      - NET_BIND_SERVICE
+      - SETUID
+      - SETGID
+      # logging:
+      # driver: "none" # Added logging driver from systemd
+    environment:
+      HOME: /root # Added HOME environment variable from systemd
+    volumes:
+      - /matrix/synapse-admin/config/config.json:/app/config.json:ro # Added volume mount from systemd
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik_network"
+      - "traefik.http.services.matrix-synapse-admin.loadbalancer.server.port=80"
+      - "traefik.http.middlewares.matrix-synapse-admin-slashless-redirect.redirectregex.regex=(/synapse-admin)$$"
+      - "traefik.http.middlewares.matrix-synapse-admin-slashless-redirect.redirectregex.replacement=https://element.{DOMAIN_NAME}$$1/" # This line is correct as is, it uses $$1
+      - "traefik.http.middlewares.matrix-synapse-admin-strip-prefix.stripprefix.prefixes=/synapse-admin"
+      - "traefik.http.middlewares.matrix-synapse-admin-add-headers.headers.customresponseheaders.X-XSS-Protection=1; mode=block"
+      - "traefik.http.middlewares.matrix-synapse-admin-add-headers.headers.customresponseheaders.X-Frame-Options=SAMEORIGIN"
+      - "traefik.http.middlewares.matrix-synapse-admin-add-headers.headers.customresponseheaders.X-Content-Type-Options=nosniff"
+      - "traefik.http.middlewares.matrix-synapse-admin-add-headers.headers.customresponseheaders.Content-Security-Policy=frame-ancestors 'self'"
+      - "traefik.http.middlewares.matrix-synapse-admin-add-headers.headers.customresponseheaders.Permission-Policy=interest-cohort=()"
+      - "traefik.http.middlewares.matrix-synapse-admin-add-headers.headers.customresponseheaders.Strict-Transport-Security=max-age=31536000; includeSubDomains"
+      - "traefik.http.routers.matrix-synapse-admin.rule=Host(`matrix.{DOMAIN_NAME}`) && PathPrefix(`/synapse-admin`)"
+      - "traefik.http.routers.matrix-synapse-admin.middlewares=matrix-synapse-admin-slashless-redirect,matrix-synapse-admin-strip-prefix,matrix-synapse-admin-add-headers"
+      - "traefik.http.routers.matrix-synapse-admin.service=matrix-synapse-admin"
+      - "traefik.http.routers.matrix-synapse-admin.entrypoints=web-secure"
+      - "traefik.http.routers.matrix-synapse-admin.tls=true"
+      - "traefik.http.routers.matrix-synapse-admin.tls.certResolver=default"
+    networks:
+      - traefik_network
+      - matrix_network # Changed from matrix-postgres_main_network to match systemd's matrix-addons (assuming matrix_network is the equivalent)
+      # - matrix-postgres_main_network # Commented out, as systemd doesn't explicitly link to this network for the admin UI
+
+  matrix-traefik-certs-dumper:
+    image: docker.io/ldez/traefik-certs-dumper:v2.8.3
+    container_name: matrix-traefik-certs-dumper
+    restart: always
+    environment:
+      - HOME=/root
+      # logging:
+      # driver: "none"
+    volumes:
+      - /matrix/traefik-certs-dumper/bin:/certs-dumper-bin:ro
+      - /matrix/traefik/ssl:/in:ro
+      - /matrix/traefik-certs-dumper/dumped-certificates:/out
+    tmpfs:
+      - /intermediate:size=100m
+      - /staging:size=100m
+    entrypoint: /bin/sh
+    command: /certs-dumper-bin/entrypoint.sh
+    # Removed user and cap_drop to match systemd service which runs as root for permissions
+    # user: "999:1001"
+    # cap_drop:
+    #   - ALL
+    depends_on:
+      traefik:
+        condition: service_started
+
+  traefik:
+    image: docker.io/traefik:v3.3.3
+    container_name: matrix-traefik
+    restart: always
+    security_opt:
+      - no-new-privileges:true
+    user: "999:1001"
+    cap_drop:
+      - ALL
+    read_only: true
+    # logging:
+    # driver: "none"
+    networks:
+      - traefik_network
+      - matrix-container-socket-proxy_network # Traefik connects to this network
+    ports:
+      - "80:8080"
+      - "443:8443"
+      - "443:8443/udp"
+      - "8448:8448"
+      - "8448:8448/udp"
+    environment:
+      - HOME=/tmp
+    env_file:
+      # Uncommented env_file
+      - /matrix/traefik/config/env
+    volumes:
+      - /matrix/traefik/config:/config:ro
+      - /matrix/traefik/ssl:/ssl
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=10m # This is already there, good.
+      - /root/.config:rw,noexec,nosuid,size=10m # <-- THIS IS THE NEW LINE TO ADD
+    command:
+      - "--configFile=/config/traefik.yml"
+    # labels:
+    #   - "traefik.enable=true"
+    #   - "traefik.http.routers.dashboard.entrypoints=web-secure"
+    #   - "traefik.http.routers.dashboard.rule=Host(`traefik.example.com`)"
+    #   - "traefik.http.routers.dashboard.service=api@internal"
+    #   - "traefik.http.middlewares.dashboard-auth.basicauth.usersfile=/config/users.txt"
+    #   - "traefik.http.routers.dashboard.tls=true"
+    #   - "traefik.http.routers.dashboard.tls.certResolver=default"
+    # healthcheck:
+    #   test: [ "CMD", "traefik", "healthcheck", "--ping" ]
+    #   interval: 10s
+    #   timeout: 5s
+    #   retries: 3
+    #   start_period: 5s
+    depends_on:
+      # Added dependency on the socket proxy
+      matrix-container-socket-proxy:
+        condition: service_started
+
+  matrix-container-socket-proxy:
+    # New service added
+    image: ghcr.io/tecnativa/docker-socket-proxy:0.2.0
+    container_name: matrix-container-socket-proxy
+    restart: always
+    # logging:
+    # driver: "none"
+    environment:
+      HOME: /root
+    cap_drop:
+      - ALL
+    # read_only is omitted as per systemd service notes (cannot be read-only)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    tmpfs:
+      - /var/lib/haproxy:rw,noexec,nosuid,size=100m
+      - /run:rw,noexec,nosuid,size=100m
+    env_file:
+      - /matrix/container-socket-proxy/env
+    # labels: # Add any labels here if this proxy needs to be exposed via Traefik,
+    #   # as per your systemd --label-file=/matrix/container-socket-proxy/labels
+    networks:
+      - matrix-container-socket-proxy_network
+
+networks:
+  matrix-coturn_network:
+    name: matrix-coturn_network # Explicitly define network name
+    driver: bridge
+  matrix_network:
+    name: matrix_network # Explicitly define network name
+    driver: bridge
+  traefik_network:
+    name: traefik_network # Explicitly define network name
+    driver: bridge
+  matrix-postgres_main_network:
+    name: matrix-postgres_main_network # Explicitly define network name
+    driver: bridge
+  matrix-homeserver_network:
+    name: matrix-homeserver_network # Explicitly define network name
+    driver: bridge
+  matrix-exim-relay_network:
+    name: matrix-exim-relay_network # Explicitly define network name
+    driver: bridge
+  matrix-container-socket-proxy_network:
+    name: matrix-container-socket-proxy_network # Explicitly define network name
+    driver: bridge
+
+volumes: {} # Changed to explicit empty mapping
