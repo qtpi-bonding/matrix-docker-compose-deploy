@@ -376,7 +376,7 @@ services:
     # labels:
     #   - "traefik.enable=true"
     #   - "traefik.http.routers.dashboard.entrypoints=web-secure"
-    #   - "traefik.http.routers.dashboard.rule=Host(`traefik.example.com`)"
+    #   - "traefik.http.routers.dashboard.rule=Host(`traefik.{DOMAIN_NAME}`)"
     #   - "traefik.http.routers.dashboard.service=api@internal"
     #   - "traefik.http.middlewares.dashboard-auth.basicauth.usersfile=/config/users.txt"
     #   - "traefik.http.routers.dashboard.tls=true"
@@ -415,6 +415,63 @@ services:
     #   # as per your systemd --label-file=/matrix/container-socket-proxy/labels
     networks:
       - matrix-container-socket-proxy_network
+
+
+  # Lemmy Services
+  lemmy-postgres:
+    image: pgautoupgrade/pgautoupgrade:17-alpine
+    # hostname: postgres
+    env_file:
+      - ./.envs/.postgres_lemmy
+    shm_size: 1g
+    volumes:
+      - lemmy_postgres_data:/var/lib/postgresql/data:Z
+      # - ./customPostgresql.conf:/etc/postgresql.conf
+    restart: always
+    # logging: *default-logging
+    networks:
+      - traefik_network # Allow communication with other Lemmy services
+
+  lemmy:
+    image: dessalines/lemmy:0.19.11
+    hostname: lemmy
+    restart: always
+    # logging: *default-logging
+    environment:
+      - RUST_LOG="warn"
+    volumes:
+      - ./.envs/lemmy.hjson:/config/config.hjson:Z
+      - pictrs:/app/pictrs # Re-adding this as it's essential for Lemmy to store images
+    # ports:
+    #   - 8536:8536 # Not needed when using Traefik, as it's an internal port for Lemmy backend
+    depends_on:
+      - lemmy-postgres
+    networks:
+      - traefik_network # Allow communication with lemmy-ui
+
+  lemmy-ui:
+    image: dessalines/lemmy-ui:0.19.11
+    env_file:
+      - ./.envs/.lemmy
+    volumes:
+      - lemmy_ui_data:/app/extra_themes
+    depends_on:
+      - lemmy
+    restart: always
+    # ports:
+    #   - 1234:1234 # Not needed when using Traefik
+    # logging: *default-logging
+    networks:
+      - traefik_network # Essential for Traefik to discover and route traffic
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.lemmy-ui.entrypoints=web-secure" # Assumes 'web-secure' entrypoint is configured in Traefik
+      - "traefik.http.routers.lemmy-ui.rule=Host(`lemmy.{DOMAIN_NAME}`)" # IMPORTANT: Change 'lemmy.{DOMAIN_NAME}' to your actual domain
+      - "traefik.http.routers.lemmy-ui.service=lemmy-ui"
+      - "traefik.http.routers.lemmy-ui.tls=true"
+      - "traefik.http.routers.lemmy-ui.tls.certResolver=default" # Assumes 'default' cert resolver is configured in Traefik
+      - "traefik.http.services.lemmy-ui.loadbalancer.server.port=1234" # Lemmy UI's default internal port
+
 
 networks:
   matrix-coturn_network:
