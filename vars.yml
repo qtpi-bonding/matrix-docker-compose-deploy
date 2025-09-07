@@ -52,6 +52,7 @@ postgres_connection_password: ''
 #
 # matrix_coturn_turn_external_ip_address: ''
 
+exim_relay_enabled: false
 
 matrix_sygnal_enabled: true
 
@@ -68,7 +69,39 @@ matrix_sygnal_configuration_extension_yaml:
       type: gcm
       api_version: v1
       project_id:  # Your Firebase Project ID
-      # Path of the JSON file in the sygnal docker container
-      service_account_file: /config/gcm.json
+      # This needs to be the path on your Sygnal server where you put the JSON file
+      service_account_file: /config/firebase-admin-sdk.json
       # You can configure more options below as shown here:
       # https://github.com/matrix-org/sygnal/blob/main/sygnal.yaml.sample
+
+matrix_synapse_enable_registration: false
+
+matrix_authentication_service_enabled: true
+# Generate this encryption secret with: `openssl rand -hex 32`
+matrix_authentication_service_config_secrets_encryption: ''
+matrix_authentication_service_config_upstream_oauth2_providers:
+  - id: ""
+    issuer: "https://keycloak.{DOMAIN.NAME}/realms/{realm_name}"
+    client_id: "matrix-authentication-service"
+    human_name: "Keycloak"
+    client_secret: ""
+    token_endpoint_auth_method: client_secret_post
+    scope: "openid email profile"
+    claims_imports:
+      localpart:
+        action: require
+        # Add the required {% raw %} tags
+        template: "{% raw %}{{ user.preferred_username }}{% endraw %}"
+      displayname:
+        action: require
+        # Add the required {% raw %} tags
+        template: "{% raw %}{{ user.given_name }}{% endraw %}"
+      email:
+        action: require
+        # Add the required {% raw %} tags
+        template: "{% raw %}{{ user.email }}{% endraw %}"
+        set_email_verification: always
+
+matrix_authentication_service_configuration_extension_yaml: |
+  passwords:
+    enabled: false

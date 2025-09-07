@@ -159,43 +159,51 @@ services:
       - "traefik.http.services.matrix-synapse-client-api.loadbalancer.server.port=8008"
       - "traefik.http.services.matrix-synapse-federation-api.loadbalancer.server.port=8048"
       - "traefik.http.services.matrix-synapse-metrics.loadbalancer.server.port=9100"
+
+      # Public Root path (/)
       - "traefik.http.middlewares.matrix-synapse-public-client-root-redirect.redirectregex.regex=(.*)"
       - "traefik.http.middlewares.matrix-synapse-public-client-root-redirect.redirectregex.replacement=https://element.{DOMAIN_NAME}"
-      - "traefik.http.middlewares.matrix-static-files-well-known-compress.compress=true"
-      - "traefik.http.middlewares.matrix-static-files-well-known-compress.compress.minResponseBodyBytes=100"
       - "traefik.http.routers.matrix-synapse-public-client-root.rule=Host(`matrix.{DOMAIN_NAME}`) && Path(`/`)"
       - "traefik.http.routers.matrix-synapse-public-client-root.middlewares=compression@file,matrix-synapse-public-client-root-redirect"
       - "traefik.http.routers.matrix-synapse-public-client-root.service=matrix-synapse-client-api"
       - "traefik.http.routers.matrix-synapse-public-client-root.entrypoints=web-secure"
       - "traefik.http.routers.matrix-synapse-public-client-root.tls=true"
       - "traefik.http.routers.matrix-synapse-public-client-root.tls.certResolver=default"
+
+      # MATRIX-RELATED (/_matrix, /_synapse/..)
+      # Public Client-API (/_matrix)
       - "traefik.http.routers.matrix-synapse-public-client-api.rule=Host(`matrix.{DOMAIN_NAME}`) && PathPrefix(`/_matrix`)"
       - "traefik.http.routers.matrix-synapse-public-client-api.middlewares=compression@file"
       - "traefik.http.routers.matrix-synapse-public-client-api.service=matrix-synapse-client-api"
       - "traefik.http.routers.matrix-synapse-public-client-api.entrypoints=web-secure"
       - "traefik.http.routers.matrix-synapse-public-client-api.tls=true"
       - "traefik.http.routers.matrix-synapse-public-client-api.tls.certResolver=default"
+
+      # Internal Client-API (/_matrix)
       - "traefik.http.routers.matrix-synapse-internal-client-api.rule=PathPrefix(`/_matrix`)"
       - "traefik.http.routers.matrix-synapse-internal-client-api.service=matrix-synapse-client-api"
       - "traefik.http.routers.matrix-synapse-internal-client-api.entrypoints=matrix-internal-matrix-client-api"
+
+      # Public Synapse Client API (/_synapse/client)
       - "traefik.http.routers.matrix-synapse-public-client-synapse-client-api.rule=Host(`matrix.{DOMAIN_NAME}`) && PathPrefix(`/_synapse/client`)"
       - "traefik.http.routers.matrix-synapse-public-client-synapse-client-api.middlewares=compression@file"
       - "traefik.http.routers.matrix-synapse-public-client-synapse-client-api.service=matrix-synapse-client-api"
       - "traefik.http.routers.matrix-synapse-public-client-synapse-client-api.entrypoints=web-secure"
       - "traefik.http.routers.matrix-synapse-public-client-synapse-client-api.tls=true"
       - "traefik.http.routers.matrix-synapse-public-client-synapse-client-api.tls.certResolver=default"
+
+      # Public Synapse Admin API (/_synapse/admin)
       - "traefik.http.routers.matrix-synapse-public-client-synapse-admin-api.rule=Host(`matrix.{DOMAIN_NAME}`) && PathPrefix(`/_synapse/admin`)"
       - "traefik.http.routers.matrix-synapse-public-client-synapse-admin-api.middlewares=compression@file"
       - "traefik.http.routers.matrix-synapse-public-client-synapse-admin-api.service=matrix-synapse-client-api"
       - "traefik.http.routers.matrix-synapse-public-client-synapse-admin-api.entrypoints=web-secure"
       - "traefik.http.routers.matrix-synapse-public-client-synapse-admin-api.tls=true"
       - "traefik.http.routers.matrix-synapse-public-client-synapse-admin-api.tls.certResolver=default"
+
+      # Public Federation-API (/_matrix)
       - "traefik.http.routers.matrix-synapse-public-federation-api.rule=Host(`matrix.{DOMAIN_NAME}`) && PathPrefix(`/_matrix`)"
       - "traefik.http.routers.matrix-synapse-public-federation-api.middlewares=compression@file"
       - "traefik.http.routers.matrix-synapse-public-federation-api.service=matrix-synapse-federation-api"
-      - "traefik.http.routers.matrix-synapse-public-federation-api.entrypoints=matrix-federation"
-      - "traefik.http.routers.matrix-synapse-public-federation-api.tls=true"
-      - "traefik.http.routers.matrix-synapse-public-federation-api.tls.certResolver=default"
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8008/_matrix/client/versions" ]
       interval: 30s
@@ -376,7 +384,7 @@ services:
     # labels:
     #   - "traefik.enable=true"
     #   - "traefik.http.routers.dashboard.entrypoints=web-secure"
-    #   - "traefik.http.routers.dashboard.rule=Host(`traefik.{DOMAIN_NAME}`)"
+    #   - "traefik.http.routers.dashboard.rule=Host(`traefik.example.com`)"
     #   - "traefik.http.routers.dashboard.service=api@internal"
     #   - "traefik.http.middlewares.dashboard-auth.basicauth.usersfile=/config/users.txt"
     #   - "traefik.http.routers.dashboard.tls=true"
@@ -416,61 +424,60 @@ services:
     networks:
       - matrix-container-socket-proxy_network
 
-
-  # Lemmy Services
-  lemmy-postgres:
-    image: pgautoupgrade/pgautoupgrade:17-alpine
-    # hostname: postgres
+  matrix-authentication-service:
+    image: ghcr.io/element-hq/matrix-authentication-service:0.13.0
+    container_name: matrix-authentication-service # Explicitly set the container name
+    volumes:
+      # Mount the configuration file as read-only
+      - /matrix/matrix-authentication-service/config/config.yaml:/config.yaml:ro
+      # Mount the keys directory as read-only
+      - /matrix/matrix-authentication-service/data/keys:/keys:ro
     env_file:
-      - ./.envs/.postgres_lemmy
-    shm_size: 1g
-    volumes:
-      - lemmy_postgres_data:/var/lib/postgresql/data:Z
-      # - ./customPostgresql.conf:/etc/postgresql.conf
-    restart: always
-    # logging: *default-logging
+      # Load environment variables from a file
+      - /matrix/matrix-authentication-service/config/env
     networks:
-      - traefik_network # Allow communication with other Lemmy services
-
-  lemmy:
-    image: dessalines/lemmy:0.19.11
-    hostname: lemmy
+      - traefik_network
+      - matrix-homeserver_network
+      - matrix-postgres_main_network
+      - matrix-exim-relay_network
+    user: "999:1001"
+    cap_drop:
+      - ALL # Drop all capabilities for security
+    read_only: true
     restart: always
-    # logging: *default-logging
-    environment:
-      - RUST_LOG="warn"
-    volumes:
-      - ./.envs/lemmy.hjson:/config/config.hjson:Z
-      - pictrs:/app/pictrs # Re-adding this as it's essential for Lemmy to store images
-    # ports:
-    #   - 8536:8536 # Not needed when using Traefik, as it's an internal port for Lemmy backend
-    depends_on:
-      - lemmy-postgres
-    networks:
-      - traefik_network # Allow communication with lemmy-ui
-
-  lemmy-ui:
-    image: dessalines/lemmy-ui:0.19.11
-    env_file:
-      - ./.envs/.lemmy
-    volumes:
-      - lemmy_ui_data:/app/extra_themes
-    depends_on:
-      - lemmy
-    restart: always
-    # ports:
-    #   - 1234:1234 # Not needed when using Traefik
-    # logging: *default-logging
-    networks:
-      - traefik_network # Essential for Traefik to discover and route traffic
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.lemmy-ui.entrypoints=web-secure" # Assumes 'web-secure' entrypoint is configured in Traefik
-      - "traefik.http.routers.lemmy-ui.rule=Host(`lemmy.{DOMAIN_NAME}`)" # IMPORTANT: Change 'lemmy.{DOMAIN_NAME}' to your actual domain
-      - "traefik.http.routers.lemmy-ui.service=lemmy-ui"
-      - "traefik.http.routers.lemmy-ui.tls=true"
-      - "traefik.http.routers.lemmy-ui.tls.certResolver=default" # Assumes 'default' cert resolver is configured in Traefik
-      - "traefik.http.services.lemmy-ui.loadbalancer.server.port=1234" # Lemmy UI's default internal port
+      - "traefik.docker.network=traefik_network" 
+      - "traefik.http.services.matrix-authentication-service.loadbalancer.server.port=8080"
+
+      # Public Main
+      - "traefik.http.middlewares.matrix-authentication-service-slashless-redirect.redirectregex.regex=(/auth)$"
+      - "traefik.http.middlewares.matrix-authentication-service-slashless-redirect.redirectregex.replacement=$${1}/"
+      - "traefik.http.routers.matrix-authentication-service.rule=Host(`matrix.{DOMAIN_NAME}`) && PathPrefix(`/auth`)"
+      - "traefik.http.routers.matrix-authentication-service.service=matrix-authentication-service"
+      - "traefik.http.routers.matrix-authentication-service.middlewares=matrix-authentication-service-slashless-redirect"
+      - "traefik.http.routers.matrix-authentication-service.entrypoints=web-secure"
+      - "traefik.http.routers.matrix-authentication-service.tls=true"
+      - "traefik.http.routers.matrix-authentication-service.tls.certResolver=default"
+
+      # Public Compatibility Layer
+      - "traefik.http.middlewares.matrix-authentication-service-add-prefix.addprefix.prefix=/auth"
+      - "traefik.http.routers._internalmatrix-authentication-service-public-compatibility-layer.rule=Host(`matrix.{DOMAIN_NAME}`) && PathRegexp(`^/_matrix/client/(?P<version>([^/]+))/(?P<endpoint>(login|logout|refresh))`)"
+      - "traefik.http.routers._internalmatrix-authentication-service-public-compatibility-layer.service=matrix-authentication-service"
+      - "traefik.http.routers._internalmatrix-authentication-service-public-compatibility-layer.middlewares=matrix-authentication-service-add-prefix"
+      - "traefik.http.routers._internalmatrix-authentication-service-public-compatibility-layer.entrypoints=web-secure"
+      - "traefik.http.routers._internalmatrix-authentication-service-public-compatibility-layer.tls=true"
+      - "traefik.http.routers._internalmatrix-authentication-service-public-compatibility-layer.tls.certResolver=default"
+
+      # Internal Compatibility Layer
+      # Note: The addprefix middleware is defined twice in your original labels.
+      # This is usually fine as Traefik will use the last definition if they are identical.
+      # If they were different, you'd need unique names for each.
+      - "traefik.http.middlewares.matrix-authentication-service-add-prefix.addprefix.prefix=/auth"
+      - "traefik.http.routers._internalmatrix-authentication-service-internal-compatibility-layer.rule=PathRegexp(`^/_matrix/client/(?P<version>([^/]+))/(?P<endpoint>(login|logout|refresh))`)"
+      - "traefik.http.routers._internalmatrix-authentication-service-internal-compatibility-layer.service=matrix-authentication-service"
+      - "traefik.http.routers._internalmatrix-authentication-service-internal-compatibility-layer.middlewares=matrix-authentication-service-add-prefix"
+      - "traefik.http.routers._internalmatrix-authentication-service-internal-compatibility-layer.entrypoints=matrix-internal-matrix-client-api"
 
 
 networks:

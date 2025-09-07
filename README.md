@@ -55,12 +55,35 @@ To get started with this Docker Compose deployment of the Matrix homeserver, fol
 
         Ensure your `vars.yml` configuration (especially `matrix_homeserver_services_enabled` and similar options) aligns with these supported services to avoid generating unnecessary configurations for components not included in this Docker Compose setup.
 
-3.  **Replace placeholder in docker-compose.yml with your domain name**
+**NOTE**: May need to change `network: traefik` to `network: traefik_network` in `/matrix/traefik/config/traefik.yml`
+
+```yaml
+providers:
+  docker:
+    endpoint: tcp://matrix-container-socket-proxy:2375
+    exposedByDefault: false
+    network: traefik_network   
+```
+
+3.  **Replace placeholder in docker-compose.yml and vars.yml with your domain name**
     * Replace `{DOMAIN_NAME}` with your domain (e.g. `example.com`).
         ```bash
         sed -i 's/{DOMAIN_NAME}/example.com/' docker-compose.yml
+        sed -i 's/{DOMAIN_NAME}/example.com/' vars.yml
         ```
 
+4.  **Replace placeholder in vars.yml with your app bundle id**
+    * Replace `app_bundle_id` with your app bundle id (e.g. `app.example`).
+        ```bash
+        sed -i 's/app_bundle_id/app.example/' vars.yml
+        ```
+
+5.  **Replace placeholder in vars.yml with your keycloak realm name**
+    * Replace `{realm_name}` with your app bundle id (e.g. `realm0`).
+        ```bash
+        sed -i 's/{realm_name}/realm0/' vars.yml
+        ```
+6.  **Move firebase-admin-sdk.json into /matrix/sygnal/config/ **
 ---
 
 ## Deployment Steps using `matrix-docker-compose-setup.sh`
@@ -76,6 +99,15 @@ All the necessary Ansible configuration generation and `systemd` cleanup steps a
     * Run `ansible-playbook -i inventory/hosts setup.yml --tags=stop` to stop any Matrix services that Ansible might have started or left running.
     * Remove all `matrix*.{service,timer}` unit files from `/etc/systemd/system/` to prevent `systemd` from interfering with Docker Compose.
     * Run `systemctl daemon-reload` to reload the `systemd` daemon.
+    * Run `sed -i 's/network: traefik/network: traefik_network/' /matrix/traefik/config/traefik.yml` to change `network: traefik` to `network: traefik_network` in `/matrix/traefik/config/traefik.yml`
+
+```yaml
+providers:
+  docker:
+    endpoint: tcp://matrix-container-socket-proxy:2375
+    exposedByDefault: false
+    network: traefik_network   
+```
 
 2.  **Deploy with Docker Compose**:
     * Finally, run `docker compose up -d` to start your Matrix homeserver stack using Docker Compose.
@@ -89,6 +121,16 @@ All the necessary Ansible configuration generation and `systemd` cleanup steps a
     ```bash
     docker compose logs -f
     ```
+
+---
+
+## OIDC Configuration 
+
+Matrix-Authentication-Service is not configured on its own subdomain but rather its own path (/auth).
+
+Therefore the OIDC URIs are:
+* `redirect_uri`: `https://<auth-service-domain>/auth/upstream/callback/<id>`
+* `backchannel_logout_uri` (optional): `https://<auth-service-domain>/auth/upstream/backchannel-logout/<id>`
 
 ---
 
